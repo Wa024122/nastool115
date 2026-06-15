@@ -1,6 +1,6 @@
 FROM kleinersource/nastool
 
-ADD https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.12.13%2B20260610-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz /tmp/python312.tar.gz
+ADD https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.12.13%2B20260610-x86_64-unknown-linux-musl-install_only_stripped.tar.gz /tmp/python312.tar.gz
 
 RUN mkdir -p /opt/python312 \
     && tar -xzf /tmp/python312.tar.gz -C /opt/python312 --strip-components=1 \
