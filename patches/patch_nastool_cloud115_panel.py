@@ -3,6 +3,7 @@ from pathlib import Path
 
 MAIN = Path("/nas-tools/web/main.py")
 NAVBAR = Path("/nas-tools/web/static/components/layout/navbar/index.js")
+NAVIGATION = Path("/nas-tools/web/templates/navigation.html")
 
 
 ROUTE = r'''
@@ -420,10 +421,10 @@ def main():
             raise RuntimeError("Could not find /do route anchor in web/main.py")
         MAIN.write_text(text.replace(anchor, ROUTE + "\n" + anchor, 1), encoding="utf-8")
 
-    nav_text = NAVBAR.read_text(encoding="utf-8")
-    if 'page: "cloud115"' in nav_text:
-        return
-    menu_item = r'''
+    if NAVBAR.exists():
+        nav_text = NAVBAR.read_text(encoding="utf-8")
+        if 'page: "cloud115"' not in nav_text:
+            menu_item = r'''
   {
     name: "115 Cloud Transfer",
     page: "cloud115",
@@ -437,15 +438,43 @@ def main():
     `,
   },
 '''
-    anchor = '    page: "service",'
-    index = nav_text.find(anchor)
-    if index == -1:
-        raise RuntimeError("Could not find service menu anchor in navbar index.js")
-    object_start = nav_text.rfind("  {", 0, index)
-    if object_start == -1:
-        raise RuntimeError("Could not find service menu object start in navbar index.js")
-    nav_text = nav_text[:object_start] + menu_item + nav_text[object_start:]
-    NAVBAR.write_text(nav_text, encoding="utf-8")
+            anchor = '    page: "service",'
+            index = nav_text.find(anchor)
+            if index == -1:
+                raise RuntimeError("Could not find service menu anchor in navbar index.js")
+            object_start = nav_text.rfind("  {", 0, index)
+            if object_start == -1:
+                raise RuntimeError("Could not find service menu object start in navbar index.js")
+            nav_text = nav_text[:object_start] + menu_item + nav_text[object_start:]
+            NAVBAR.write_text(nav_text, encoding="utf-8")
+
+    if NAVIGATION.exists():
+        nav_html = NAVIGATION.read_text(encoding="utf-8")
+        if "/cloud115" not in nav_html:
+            item = r'''
+<li class="nav-item">
+  <a class="nav-link" href="/cloud115">
+    <span class="nav-link-icon d-md-none d-lg-inline-block">
+      <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-cloud-upload" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
+        <path d="M7 18a4.6 4.4 0 0 1 0 -9a5 4.5 0 0 1 9.7 -1.5a4.5 4.5 0 0 1 2.3 8.5"></path>
+        <path d="M12 12l0 9"></path>
+        <path d="M9 15l3 -3l3 3"></path>
+      </svg>
+    </span>
+    <span class="nav-link-title">115 Cloud Transfer</span>
+  </a>
+</li>
+'''
+            anchors = ('<li class="nav-item', '</ul>')
+            insert_at = nav_html.find(anchors[0])
+            if insert_at == -1:
+                insert_at = nav_html.rfind(anchors[1])
+            if insert_at == -1:
+                nav_html = nav_html + "\n" + item
+            else:
+                nav_html = nav_html[:insert_at] + item + "\n" + nav_html[insert_at:]
+            NAVIGATION.write_text(nav_html, encoding="utf-8")
 
 
 if __name__ == "__main__":
