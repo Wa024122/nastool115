@@ -10,10 +10,15 @@ RUN mkdir -p /opt/python312 \
 
 COPY patches/cloud115_utils.py /nas-tools/app/utils/cloud115_utils.py
 COPY patches/cloud115_worker.py /nas-tools/app/utils/cloud115_worker.py
+COPY patches/cloud115.html /nas-tools/web/templates/cloud115.html
 COPY patches/patch_nastool_cloud115.py /tmp/patch_nastool_cloud115.py
+COPY patches/patch_nastool_cloud115_panel.py /tmp/patch_nastool_cloud115_panel.py
 RUN python /tmp/patch_nastool_cloud115.py
+RUN python /tmp/patch_nastool_cloud115_panel.py
 
 ENV NASTOOL_AUTO_UPDATE=false
 ENV CLOUD115_PYTHON=/opt/python312/bin/python3.12
 ENV CLOUD115_SRC_PREFIX=/root/NASTOOL/NASTOOL/nastool
 ENV CLOUD115_REMOTE_SRC_ROOT=/nastool
+ENV CLOUD115_DEST_PREFIX=
+ENV CLOUD115_REMOTE_DEST_ROOT=
