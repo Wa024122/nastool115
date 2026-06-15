@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 
 MAIN = Path("/nas-tools/web/main.py")
@@ -26,10 +26,10 @@ def cloud115():
             os.environ["CLOUD115_COOKIES"] = cookie
         if not source_path:
             status = False
-            message = "源目录不能为空"
+            message = "婧愮洰褰曚笉鑳戒负绌?
         elif not target_path:
             status = False
-            message = "目标目录不能为空"
+            message = "鐩爣鐩綍涓嶈兘涓虹┖"
         else:
             try:
                 import json as jsonlib
@@ -54,13 +54,30 @@ def cloud115():
                     text=True,
                 )
                 if proc.returncode != 0:
-                    raise RuntimeError((proc.stderr or proc.stdout or "读取115源目录失败").strip())
+                    raise RuntimeError((proc.stderr or proc.stdout or "璇诲彇115婧愮洰褰曞け璐?).strip())
                 walked = jsonlib.loads((proc.stdout or "{}").strip())
                 if not walked.get("ok"):
-                    raise RuntimeError(walked.get("message") or "读取115源目录失败")
+                    raise RuntimeError(walked.get("message") or "璇诲彇115婧愮洰褰曞け璐?)
                 files = walked.get("files") or []
-                if not files:
-                    raise RuntimeError("源目录下没有可处理文件")
+                media_exts = {
+                    ".mp4", ".mkv", ".ts", ".iso", ".rmvb", ".avi", ".mov", ".mpeg", ".mpg",
+                    ".wmv", ".3gp", ".asf", ".m4v", ".flv", ".m2ts", ".strm", ".tp", ".f4v",
+                }
+                subtitle_exts = {".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt", ".sup"}
+                media_files = [
+                    item for item in files
+                    if os.path.splitext(item.get("name") or item.get("path") or "")[-1].lower() in media_exts
+                ]
+                subtitle_files = [
+                    item for item in files
+                    if os.path.splitext(item.get("name") or item.get("path") or "")[-1].lower() in subtitle_exts
+                ]
+                other_files = [
+                    item for item in files
+                    if item not in media_files and item not in subtitle_files
+                ]
+                if not media_files:
+                    raise RuntimeError("婧愮洰褰曚笅娌℃湁鍙鐞嗙殑瑙嗛鏂囦欢")
 
                 tmp_root = tempfile.mkdtemp(prefix="cloud115-virtual-")
                 virtual_src = os.path.join(tmp_root, "src")
@@ -69,14 +86,15 @@ def cloud115():
                 os.makedirs(virtual_dst, exist_ok=True)
                 local_files = []
                 remote_source = source_path.rstrip("/") or "/"
-                for item in files:
+                for item in media_files + subtitle_files:
                     remote_file = item.get("path") or ""
                     rel = posixpath.relpath(remote_file, remote_source).replace("/", os.sep)
                     local_file = os.path.join(virtual_src, rel)
                     os.makedirs(os.path.dirname(local_file), exist_ok=True)
                     with open(local_file, "wb") as fp:
                         fp.write(b"0")
-                    local_files.append(local_file)
+                    if item in media_files:
+                        local_files.append(local_file)
 
                 old_env = {
                     "CLOUD115_SRC_PREFIX": os.environ.get("CLOUD115_SRC_PREFIX"),
@@ -98,6 +116,9 @@ def cloud115():
                         min_filesize=0,
                         root_path=True,
                     )
+                    cleanup_count = 0
+                    if ret:
+                        cleanup_count = delete_extra_files(other_files, python, worker, env)
                 finally:
                     for key, value in old_env.items():
                         if value is None:
@@ -106,7 +127,9 @@ def cloud115():
                             os.environ[key] = value
                     shutil.rmtree(tmp_root, ignore_errors=True)
                 status = bool(ret)
-                message = ret_msg or ("115云端转移完成" if ret else "115云端转移失败")
+                message = ret_msg or ("115浜戠杞Щ瀹屾垚" if ret else "115浜戠杞Щ澶辫触")
+                if status:
+                    message = f"{message}锛涘凡娓呯悊闈炶棰?瀛楀箷鏂囦欢 {cleanup_count} 涓?
             except Exception as err:
                 status = False
                 message = str(err)
@@ -117,6 +140,37 @@ def cloud115():
         Status=status,
         Message=message,
     )
+
+
+def cloud115_call_worker(python, worker, args, env):
+    import json as jsonlib
+    import subprocess
+
+    proc = subprocess.run(
+        [python, worker] + args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        text=True,
+    )
+    body = (proc.stdout or "").strip()
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or body or "115 worker failed").strip())
+    data = jsonlib.loads(body or "{}")
+    if not data.get("ok"):
+        raise RuntimeError(data.get("message") or "115 worker failed")
+    return data.get("message")
+
+
+def delete_extra_files(other_files, python, worker, env):
+    count = 0
+    for item in other_files:
+        path = item.get("path")
+        if not path:
+            continue
+        cloud115_call_worker(python, worker, ["delete", path], env)
+        count += 1
+    return count
 
 
 @App.route('/cloud115/list', methods=['POST'])
@@ -143,7 +197,7 @@ def cloud115_list():
     if proc.returncode != 0:
         body = jsonlib.dumps({
             "ok": False,
-            "message": (proc.stderr or body or "读取115目录失败").strip(),
+            "message": (proc.stderr or body or "璇诲彇115鐩綍澶辫触").strip(),
         }, ensure_ascii=False)
     return body, 200, {"Content-Type": "application/json; charset=utf-8"}
 '''
@@ -164,7 +218,7 @@ def main():
         return
     menu_item = r'''
   {
-    name: "115云端转移",
+    name: "115浜戠杞Щ",
     page: "cloud115",
     icon: html`
       <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-cloud-upload" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
@@ -176,7 +230,7 @@ def main():
     `,
   },
 '''
-    anchor = '  {\n    name: "服务",\n    page: "service",'
+    anchor = '  {\n    name: "鏈嶅姟",\n    page: "service",'
     if anchor not in nav_text:
         anchor = '    page: "service",'
         index = nav_text.find(anchor)

@@ -18,6 +18,7 @@ class Cloud115Mover:
         self.src_prefix = os.getenv("CLOUD115_SRC_PREFIX", "").rstrip("/\\")
         self.remote_src_root = self._clean_remote_dir(os.getenv("CLOUD115_REMOTE_SRC_ROOT", ""))
         self.on_conflict = os.getenv("CLOUD115_ON_CONFLICT", "fail").strip().lower()
+        self.delay = float(os.getenv("CLOUD115_DELAY_SECONDS", "1.5") or "0")
         if not self.cookies:
             raise Cloud115Error("CLOUD115_COOKIES or CLOUD115_COOKIE_FILE is not configured")
 
@@ -55,7 +56,11 @@ class Cloud115Mover:
         self._move_file(file_id, dest_parent_id)
         if src_name != dest_name:
             self._rename_file(file_id, dest_name)
-        return ""
+        self._sleep()
+        return {
+            "source": src_remote,
+            "target": dest_remote,
+        }
 
     def list_path(self, path):
         cid = self._resolve_dir(path)
@@ -258,12 +263,29 @@ class Cloud115Mover:
     def _move_file(self, file_id, dest_parent_id):
         from p115client.client import check_response
 
-        resp = self.client.fs_move_app(
-            {"ids": str(file_id), "to_cid": int(dest_parent_id)},
-            app="android",
-        )
-        check_response(resp)
+        errors = []
+        for call in (
+            lambda: self.client.fs_move_app(str(file_id), pid=int(dest_parent_id), app="android"),
+            lambda: self.client.fs_move(str(file_id), pid=int(dest_parent_id)),
+        ):
+            try:
+                resp = call()
+                check_response(resp)
+                self._list_dir.cache_clear()
+                self._sleep()
+                return
+            except Exception as err:
+                errors.append(str(err))
+        resp = requests.post(
+            "https://webapi.115.com/files/move",
+            data={"ids": str(file_id), "to_cid": int(dest_parent_id)},
+            headers=self._headers,
+            timeout=30,
+        ).json()
+        if not resp.get("state", False):
+            raise Cloud115Error(f"failed to move 115 file: {resp}; previous={errors}")
         self._list_dir.cache_clear()
+        self._sleep()
 
     def _rename_file(self, file_id, new_name):
         method = getattr(self.client, "fs_rename_app", None)
@@ -271,6 +293,7 @@ class Cloud115Mover:
             resp = method((str(file_id), new_name), app="android")
             self._check_optional_response(resp, "failed to rename 115 file")
             self._list_dir.cache_clear()
+            self._sleep()
             return
 
         method = getattr(self.client, "fs_rename", None)
@@ -278,6 +301,7 @@ class Cloud115Mover:
             resp = method((str(file_id), new_name))
             self._check_optional_response(resp, "failed to rename 115 file")
             self._list_dir.cache_clear()
+            self._sleep()
             return
 
         for method_name in ("fs_rename_open", "fs_update_open"):
@@ -287,6 +311,7 @@ class Cloud115Mover:
             resp = method({"file_id": str(file_id), "file_name": new_name})
             self._check_optional_response(resp, "failed to rename 115 file")
             self._list_dir.cache_clear()
+            self._sleep()
             return
 
         resp = requests.post(
@@ -297,6 +322,40 @@ class Cloud115Mover:
         ).json()
         self._check_optional_response(resp, "failed to rename 115 file")
         self._list_dir.cache_clear()
+        self._sleep()
+
+    def _delete_file(self, file_id):
+        from p115client.client import check_response
+
+        errors = []
+        for call in (
+            lambda: self.client.fs_delete_app(str(file_id), app="android"),
+            lambda: self.client.fs_delete(str(file_id)),
+        ):
+            try:
+                resp = call()
+                check_response(resp)
+                self._list_dir.cache_clear()
+                self._sleep()
+                return
+            except Exception as err:
+                errors.append(str(err))
+        raise Cloud115Error(f"failed to delete 115 file: {file_id}; previous={errors}")
+
+    def delete_path(self, path):
+        path = self._clean_remote_file(path)
+        parent = posixpath.dirname(path)
+        name = posixpath.basename(path)
+        parent_id = self._resolve_dir(parent)
+        item = self._find_child(parent_id, name, want_dir=False)
+        if not item:
+            return f"not found, skipped: {path}"
+        self._delete_file(item["id"])
+        return f"deleted: {path}"
+
+    def _sleep(self):
+        if self.delay > 0:
+            time.sleep(self.delay)
 
     @staticmethod
     def _check_optional_response(resp, message):
@@ -320,6 +379,10 @@ def main():
     if len(sys.argv) >= 2 and sys.argv[1] == "test":
         Cloud115Mover().list_path("/")
         print(json.dumps({"ok": True, "message": "115 Cookie 可用"}, ensure_ascii=False))
+        return
+    if len(sys.argv) >= 3 and sys.argv[1] == "delete":
+        message = Cloud115Mover().delete_path(sys.argv[2])
+        print(json.dumps({"ok": True, "message": message}, ensure_ascii=False))
         return
     if len(sys.argv) == 3:
         message = Cloud115Mover().move(sys.argv[1], sys.argv[2])
