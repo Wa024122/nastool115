@@ -67,6 +67,25 @@ class Cloud115Mover:
             "items": items,
         }
 
+    def walk_path(self, path):
+        path = self._clean_remote_dir(path)
+        cid = self._resolve_dir(path)
+        files = []
+        self._walk_dir(cid, path, files)
+        return {"path": path, "files": files}
+
+    def _walk_dir(self, cid, path, files):
+        for item in self._list_dir(str(cid)):
+            item_path = posixpath.join(path, item["name"])
+            if item["is_dir"]:
+                self._walk_dir(item["id"], item_path, files)
+            else:
+                files.append({
+                    "path": item_path,
+                    "name": item["name"],
+                    "id": item["id"],
+                })
+
     def _load_cookies(self):
         cookies = os.getenv("CLOUD115_COOKIES", "").strip()
         if cookies:
@@ -272,6 +291,12 @@ def main():
     if len(sys.argv) >= 2 and sys.argv[1] == "list":
         path = sys.argv[2] if len(sys.argv) >= 3 else "/"
         result = Cloud115Mover().list_path(path)
+        result["ok"] = True
+        print(json.dumps(result, ensure_ascii=False))
+        return
+    if len(sys.argv) >= 2 and sys.argv[1] == "walk":
+        path = sys.argv[2] if len(sys.argv) >= 3 else "/"
+        result = Cloud115Mover().walk_path(path)
         result["ok"] = True
         print(json.dumps(result, ensure_ascii=False))
         return

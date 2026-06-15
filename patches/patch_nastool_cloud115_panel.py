@@ -32,11 +32,81 @@ def cloud115():
             message = "目标目录不能为空"
         else:
             try:
+                import json as jsonlib
+                import os
+                import posixpath
+                import shutil
+                import subprocess
+                import tempfile
                 from app.filetransfer import FileTransfer
+                from app.utils.types import RmtMode, SyncType
 
-                FileTransfer().transfer_manually(source_path, target_path, "cloud115")
-                status = True
-                message = "115云端转移任务已执行，请查看后台日志确认每个文件结果。"
+                env = os.environ.copy()
+                if cookie:
+                    env["CLOUD115_COOKIES"] = cookie
+                python = env.get("CLOUD115_PYTHON", "/opt/python312/bin/python3.12")
+                worker = env.get("CLOUD115_WORKER", "/nas-tools/app/utils/cloud115_worker.py")
+                proc = subprocess.run(
+                    [python, worker, "walk", source_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                    text=True,
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError((proc.stderr or proc.stdout or "读取115源目录失败").strip())
+                walked = jsonlib.loads((proc.stdout or "{}").strip())
+                if not walked.get("ok"):
+                    raise RuntimeError(walked.get("message") or "读取115源目录失败")
+                files = walked.get("files") or []
+                if not files:
+                    raise RuntimeError("源目录下没有可处理文件")
+
+                tmp_root = tempfile.mkdtemp(prefix="cloud115-virtual-")
+                virtual_src = os.path.join(tmp_root, "src")
+                virtual_dst = os.path.join(tmp_root, "dst")
+                os.makedirs(virtual_src, exist_ok=True)
+                os.makedirs(virtual_dst, exist_ok=True)
+                local_files = []
+                remote_source = source_path.rstrip("/") or "/"
+                for item in files:
+                    remote_file = item.get("path") or ""
+                    rel = posixpath.relpath(remote_file, remote_source).replace("/", os.sep)
+                    local_file = os.path.join(virtual_src, rel)
+                    os.makedirs(os.path.dirname(local_file), exist_ok=True)
+                    with open(local_file, "wb") as fp:
+                        fp.write(b"0")
+                    local_files.append(local_file)
+
+                old_env = {
+                    "CLOUD115_SRC_PREFIX": os.environ.get("CLOUD115_SRC_PREFIX"),
+                    "CLOUD115_REMOTE_SRC_ROOT": os.environ.get("CLOUD115_REMOTE_SRC_ROOT"),
+                    "CLOUD115_DEST_PREFIX": os.environ.get("CLOUD115_DEST_PREFIX"),
+                    "CLOUD115_REMOTE_DEST_ROOT": os.environ.get("CLOUD115_REMOTE_DEST_ROOT"),
+                }
+                os.environ["CLOUD115_SRC_PREFIX"] = virtual_src
+                os.environ["CLOUD115_REMOTE_SRC_ROOT"] = remote_source
+                os.environ["CLOUD115_DEST_PREFIX"] = virtual_dst
+                os.environ["CLOUD115_REMOTE_DEST_ROOT"] = target_path.rstrip("/") or "/"
+                try:
+                    ret, ret_msg = FileTransfer().transfer_media(
+                        in_from=SyncType.MAN,
+                        in_path=virtual_src,
+                        files=local_files,
+                        target_dir=virtual_dst,
+                        rmt_mode=RmtMode.CLOUD115,
+                        min_filesize=0,
+                        root_path=True,
+                    )
+                finally:
+                    for key, value in old_env.items():
+                        if value is None:
+                            os.environ.pop(key, None)
+                        else:
+                            os.environ[key] = value
+                    shutil.rmtree(tmp_root, ignore_errors=True)
+                status = bool(ret)
+                message = ret_msg or ("115云端转移完成" if ret else "115云端转移失败")
             except Exception as err:
                 status = False
                 message = str(err)
