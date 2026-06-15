@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 
 MAIN = Path("/nas-tools/web/main.py")
@@ -11,7 +11,8 @@ ROUTE = r'''
 def cloud115():
     """
     Standalone 115 cloud transfer panel.
-    It reuses NASTool manual recognition/naming and forces cloud115 transfer mode.
+    It uses temporary placeholder files for NASTool recognition/naming,
+    while real move/rename/delete operations happen in 115 cloud.
     """
     message = None
     status = None
@@ -26,10 +27,10 @@ def cloud115():
             os.environ["CLOUD115_COOKIES"] = cookie
         if not source_path:
             status = False
-            message = "婧愮洰褰曚笉鑳戒负绌?
+            message = "Source path is required"
         elif not target_path:
             status = False
-            message = "鐩爣鐩綍涓嶈兘涓虹┖"
+            message = "Target path is required"
         else:
             try:
                 import json as jsonlib
@@ -54,10 +55,10 @@ def cloud115():
                     text=True,
                 )
                 if proc.returncode != 0:
-                    raise RuntimeError((proc.stderr or proc.stdout or "璇诲彇115婧愮洰褰曞け璐?).strip())
+                    raise RuntimeError((proc.stderr or proc.stdout or "Failed to read 115 source path").strip())
                 walked = jsonlib.loads((proc.stdout or "{}").strip())
                 if not walked.get("ok"):
-                    raise RuntimeError(walked.get("message") or "璇诲彇115婧愮洰褰曞け璐?)
+                    raise RuntimeError(walked.get("message") or "Failed to read 115 source path")
                 files = walked.get("files") or []
                 media_exts = {
                     ".mp4", ".mkv", ".ts", ".iso", ".rmvb", ".avi", ".mov", ".mpeg", ".mpg",
@@ -77,7 +78,7 @@ def cloud115():
                     if item not in media_files and item not in subtitle_files
                 ]
                 if not media_files:
-                    raise RuntimeError("婧愮洰褰曚笅娌℃湁鍙鐞嗙殑瑙嗛鏂囦欢")
+                    raise RuntimeError("No media files found in source path")
 
                 tmp_root = tempfile.mkdtemp(prefix="cloud115-virtual-")
                 virtual_src = os.path.join(tmp_root, "src")
@@ -127,9 +128,9 @@ def cloud115():
                             os.environ[key] = value
                     shutil.rmtree(tmp_root, ignore_errors=True)
                 status = bool(ret)
-                message = ret_msg or ("115浜戠杞Щ瀹屾垚" if ret else "115浜戠杞Щ澶辫触")
+                message = ret_msg or ("115 cloud transfer completed" if ret else "115 cloud transfer failed")
                 if status:
-                    message = f"{message}锛涘凡娓呯悊闈炶棰?瀛楀箷鏂囦欢 {cleanup_count} 涓?
+                    message = f"{message}; deleted extra files: {cleanup_count}"
             except Exception as err:
                 status = False
                 message = str(err)
@@ -197,7 +198,7 @@ def cloud115_list():
     if proc.returncode != 0:
         body = jsonlib.dumps({
             "ok": False,
-            "message": (proc.stderr or body or "璇诲彇115鐩綍澶辫触").strip(),
+            "message": (proc.stderr or body or "Failed to read 115 path").strip(),
         }, ensure_ascii=False)
     return body, 200, {"Content-Type": "application/json; charset=utf-8"}
 '''
@@ -205,9 +206,7 @@ def cloud115_list():
 
 def main():
     text = MAIN.read_text(encoding="utf-8")
-    if "@App.route('/cloud115'" in text:
-        pass
-    else:
+    if "@App.route('/cloud115'" not in text:
         anchor = "@App.route('/do', methods=['POST'])"
         if anchor not in text:
             raise RuntimeError("Could not find /do route anchor in web/main.py")
@@ -218,7 +217,7 @@ def main():
         return
     menu_item = r'''
   {
-    name: "115浜戠杞Щ",
+    name: "115 Cloud Transfer",
     page: "cloud115",
     icon: html`
       <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-cloud-upload" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
@@ -230,7 +229,7 @@ def main():
     `,
   },
 '''
-    anchor = '  {\n    name: "鏈嶅姟",\n    page: "service",'
+    anchor = '  {\n    name: "服务",\n    page: "service",'
     if anchor not in nav_text:
         anchor = '    page: "service",'
         index = nav_text.find(anchor)
