@@ -7,140 +7,60 @@ NAVBAR = Path("/nas-tools/web/static/components/layout/navbar/index.js")
 
 ROUTE = r'''
 
-@App.route('/cloud115', methods=['POST', 'GET'])
-def cloud115():
-    """
-    Standalone 115 cloud transfer panel.
-    It uses temporary placeholder files for NASTool recognition/naming,
-    while real move/rename/delete operations happen in 115 cloud.
-    """
-    message = None
-    status = None
-    source_path = ""
-    target_path = ""
-    if request.method == "POST":
-        cookie = request.form.get("cookie", "").strip()
-        source_path = request.form.get("source_path", "").strip()
-        target_path = request.form.get("target_path", "").strip()
-        if cookie:
-            import os
-            os.environ["CLOUD115_COOKIES"] = cookie
-        if not source_path:
-            status = False
-            message = "Source path is required"
-        elif not target_path:
-            status = False
-            message = "Target path is required"
-        else:
-            try:
-                import json as jsonlib
-                import os
-                import posixpath
-                import shutil
-                import subprocess
-                import tempfile
-                from app.filetransfer import FileTransfer
-                from app.utils.types import RmtMode, SyncType
+CLOUD115_CONFIG_FILE = "/config/cloud115.json"
+CLOUD115_SCHEDULER_STARTED = False
+CLOUD115_RUNNING = False
 
-                env = os.environ.copy()
-                if cookie:
-                    env["CLOUD115_COOKIES"] = cookie
-                python = env.get("CLOUD115_PYTHON", "/opt/python312/bin/python3.12")
-                worker = env.get("CLOUD115_WORKER", "/nas-tools/app/utils/cloud115_worker.py")
-                proc = subprocess.run(
-                    [python, worker, "walk", source_path],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    env=env,
-                    text=True,
-                )
-                if proc.returncode != 0:
-                    raise RuntimeError((proc.stderr or proc.stdout or "Failed to read 115 source path").strip())
-                walked = jsonlib.loads((proc.stdout or "{}").strip())
-                if not walked.get("ok"):
-                    raise RuntimeError(walked.get("message") or "Failed to read 115 source path")
-                files = walked.get("files") or []
-                media_exts = {
-                    ".mp4", ".mkv", ".ts", ".iso", ".rmvb", ".avi", ".mov", ".mpeg", ".mpg",
-                    ".wmv", ".3gp", ".asf", ".m4v", ".flv", ".m2ts", ".strm", ".tp", ".f4v",
-                }
-                subtitle_exts = {".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt", ".sup"}
-                media_files = [
-                    item for item in files
-                    if os.path.splitext(item.get("name") or item.get("path") or "")[-1].lower() in media_exts
-                ]
-                subtitle_files = [
-                    item for item in files
-                    if os.path.splitext(item.get("name") or item.get("path") or "")[-1].lower() in subtitle_exts
-                ]
-                other_files = [
-                    item for item in files
-                    if item not in media_files and item not in subtitle_files
-                ]
-                if not media_files:
-                    raise RuntimeError("No media files found in source path")
 
-                tmp_root = tempfile.mkdtemp(prefix="cloud115-virtual-")
-                virtual_src = os.path.join(tmp_root, "src")
-                virtual_dst = os.path.join(tmp_root, "dst")
-                os.makedirs(virtual_src, exist_ok=True)
-                os.makedirs(virtual_dst, exist_ok=True)
-                local_files = []
-                remote_source = source_path.rstrip("/") or "/"
-                for item in media_files + subtitle_files:
-                    remote_file = item.get("path") or ""
-                    rel = posixpath.relpath(remote_file, remote_source).replace("/", os.sep)
-                    local_file = os.path.join(virtual_src, rel)
-                    os.makedirs(os.path.dirname(local_file), exist_ok=True)
-                    with open(local_file, "wb") as fp:
-                        fp.write(b"0")
-                    if item in media_files:
-                        local_files.append(local_file)
+def cloud115_default_config():
+    return {
+        "cookie": "",
+        "source_path": "/nastool",
+        "target_path": "/nastool-transfer",
+        "delay_seconds": 2,
+        "auto_enabled": False,
+        "interval_minutes": 60,
+        "delete_extras": True,
+        "last_run": "",
+        "last_message": "",
+        "last_status": None,
+    }
 
-                old_env = {
-                    "CLOUD115_SRC_PREFIX": os.environ.get("CLOUD115_SRC_PREFIX"),
-                    "CLOUD115_REMOTE_SRC_ROOT": os.environ.get("CLOUD115_REMOTE_SRC_ROOT"),
-                    "CLOUD115_DEST_PREFIX": os.environ.get("CLOUD115_DEST_PREFIX"),
-                    "CLOUD115_REMOTE_DEST_ROOT": os.environ.get("CLOUD115_REMOTE_DEST_ROOT"),
-                }
-                os.environ["CLOUD115_SRC_PREFIX"] = virtual_src
-                os.environ["CLOUD115_REMOTE_SRC_ROOT"] = remote_source
-                os.environ["CLOUD115_DEST_PREFIX"] = virtual_dst
-                os.environ["CLOUD115_REMOTE_DEST_ROOT"] = target_path.rstrip("/") or "/"
-                try:
-                    ret, ret_msg = FileTransfer().transfer_media(
-                        in_from=SyncType.MAN,
-                        in_path=virtual_src,
-                        files=local_files,
-                        target_dir=virtual_dst,
-                        rmt_mode=RmtMode.CLOUD115,
-                        min_filesize=0,
-                        root_path=True,
-                    )
-                    cleanup_count = 0
-                    if ret:
-                        cleanup_count = delete_extra_files(other_files, python, worker, env)
-                finally:
-                    for key, value in old_env.items():
-                        if value is None:
-                            os.environ.pop(key, None)
-                        else:
-                            os.environ[key] = value
-                    shutil.rmtree(tmp_root, ignore_errors=True)
-                status = bool(ret)
-                message = ret_msg or ("115 cloud transfer completed" if ret else "115 cloud transfer failed")
-                if status:
-                    message = f"{message}; deleted extra files: {cleanup_count}"
-            except Exception as err:
-                status = False
-                message = str(err)
-    return render_template(
-        "cloud115.html",
-        SourcePath=source_path,
-        TargetPath=target_path,
-        Status=status,
-        Message=message,
-    )
+
+def cloud115_load_config():
+    import json
+    import os
+
+    cfg = cloud115_default_config()
+    if os.path.exists(CLOUD115_CONFIG_FILE):
+        try:
+            with open(CLOUD115_CONFIG_FILE, "r", encoding="utf-8") as fp:
+                saved = json.load(fp)
+            if isinstance(saved, dict):
+                cfg.update(saved)
+        except Exception:
+            pass
+    return cfg
+
+
+def cloud115_save_config(cfg):
+    import json
+    import os
+
+    os.makedirs(os.path.dirname(CLOUD115_CONFIG_FILE), exist_ok=True)
+    with open(CLOUD115_CONFIG_FILE, "w", encoding="utf-8") as fp:
+        json.dump(cfg, fp, ensure_ascii=False, indent=2)
+
+
+def cloud115_get_media_exts():
+    try:
+        from app.conf import RMT_MEDIAEXT
+        return {str(ext).lower() for ext in RMT_MEDIAEXT}
+    except Exception:
+        return {
+            ".mp4", ".mkv", ".ts", ".iso", ".rmvb", ".avi", ".mov", ".mpeg", ".mpg",
+            ".wmv", ".3gp", ".asf", ".m4v", ".flv", ".m2ts", ".strm", ".tp", ".f4v",
+        }
 
 
 def cloud115_call_worker(python, worker, args, env):
@@ -163,7 +83,7 @@ def cloud115_call_worker(python, worker, args, env):
     return data.get("message")
 
 
-def delete_extra_files(other_files, python, worker, env):
+def cloud115_delete_extra_files(other_files, python, worker, env):
     count = 0
     for item in other_files:
         path = item.get("path")
@@ -174,13 +94,217 @@ def delete_extra_files(other_files, python, worker, env):
     return count
 
 
+def cloud115_execute(cfg):
+    import json as jsonlib
+    import os
+    import posixpath
+    import shutil
+    import subprocess
+    import tempfile
+    from app.filetransfer import FileTransfer
+    from app.utils.types import RmtMode, SyncType
+
+    source_path = (cfg.get("source_path") or "").strip()
+    target_path = (cfg.get("target_path") or "").strip()
+    cookie = (cfg.get("cookie") or "").strip()
+    if not source_path:
+        raise RuntimeError("Source path is required")
+    if not target_path:
+        raise RuntimeError("Target path is required")
+    if not cookie:
+        raise RuntimeError("115 Cookie is required")
+
+    os.environ["CLOUD115_COOKIES"] = cookie
+    os.environ["CLOUD115_DELAY_SECONDS"] = str(cfg.get("delay_seconds") or 0)
+
+    env = os.environ.copy()
+    python = env.get("CLOUD115_PYTHON", "/opt/python312/bin/python3.12")
+    worker = env.get("CLOUD115_WORKER", "/nas-tools/app/utils/cloud115_worker.py")
+    proc = subprocess.run(
+        [python, worker, "walk", source_path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "Failed to read 115 source path").strip())
+    walked = jsonlib.loads((proc.stdout or "{}").strip())
+    if not walked.get("ok"):
+        raise RuntimeError(walked.get("message") or "Failed to read 115 source path")
+
+    files = walked.get("files") or []
+    media_exts = cloud115_get_media_exts()
+    subtitle_exts = {".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt", ".sup"}
+    media_files = [
+        item for item in files
+        if os.path.splitext(item.get("name") or item.get("path") or "")[-1].lower() in media_exts
+    ]
+    subtitle_files = [
+        item for item in files
+        if os.path.splitext(item.get("name") or item.get("path") or "")[-1].lower() in subtitle_exts
+    ]
+    other_files = [
+        item for item in files
+        if item not in media_files and item not in subtitle_files
+    ]
+    if not media_files:
+        raise RuntimeError("No media files found in source path")
+
+    tmp_root = tempfile.mkdtemp(prefix="cloud115-virtual-")
+    virtual_src = os.path.join(tmp_root, "src")
+    virtual_dst = os.path.join(tmp_root, "dst")
+    os.makedirs(virtual_src, exist_ok=True)
+    os.makedirs(virtual_dst, exist_ok=True)
+    local_files = []
+    remote_source = source_path.rstrip("/") or "/"
+    for item in media_files + subtitle_files:
+        remote_file = item.get("path") or ""
+        rel = posixpath.relpath(remote_file, remote_source).replace("/", os.sep)
+        local_file = os.path.join(virtual_src, rel)
+        os.makedirs(os.path.dirname(local_file), exist_ok=True)
+        with open(local_file, "wb") as fp:
+            fp.write(b"0")
+        if item in media_files:
+            local_files.append(local_file)
+
+    old_env = {
+        "CLOUD115_SRC_PREFIX": os.environ.get("CLOUD115_SRC_PREFIX"),
+        "CLOUD115_REMOTE_SRC_ROOT": os.environ.get("CLOUD115_REMOTE_SRC_ROOT"),
+        "CLOUD115_DEST_PREFIX": os.environ.get("CLOUD115_DEST_PREFIX"),
+        "CLOUD115_REMOTE_DEST_ROOT": os.environ.get("CLOUD115_REMOTE_DEST_ROOT"),
+    }
+    os.environ["CLOUD115_SRC_PREFIX"] = virtual_src
+    os.environ["CLOUD115_REMOTE_SRC_ROOT"] = remote_source
+    os.environ["CLOUD115_DEST_PREFIX"] = virtual_dst
+    os.environ["CLOUD115_REMOTE_DEST_ROOT"] = target_path.rstrip("/") or "/"
+    try:
+        ret, ret_msg = FileTransfer().transfer_media(
+            in_from=SyncType.MAN,
+            in_path=virtual_src,
+            files=local_files,
+            target_dir=virtual_dst,
+            rmt_mode=RmtMode.CLOUD115,
+            min_filesize=0,
+            root_path=True,
+        )
+        cleanup_count = 0
+        if ret and cfg.get("delete_extras", True):
+            cleanup_count = cloud115_delete_extra_files(other_files, python, worker, env)
+    finally:
+        for key, value in old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        shutil.rmtree(tmp_root, ignore_errors=True)
+
+    if not ret:
+        raise RuntimeError(ret_msg or "115 cloud transfer failed")
+    return f"Transfer completed; media={len(media_files)}, subtitles={len(subtitle_files)}, deleted_extras={cleanup_count}"
+
+
+def cloud115_record_result(cfg, status, message):
+    from datetime import datetime
+
+    cfg["last_status"] = bool(status)
+    cfg["last_message"] = str(message)
+    cfg["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cloud115_save_config(cfg)
+
+
+def cloud115_scheduler_loop():
+    import time
+
+    global CLOUD115_RUNNING
+    while True:
+        try:
+            cfg = cloud115_load_config()
+            enabled = bool(cfg.get("auto_enabled"))
+            interval = int(cfg.get("interval_minutes") or 60)
+            if enabled and interval > 0 and not CLOUD115_RUNNING:
+                CLOUD115_RUNNING = True
+                try:
+                    message = cloud115_execute(cfg)
+                    cloud115_record_result(cfg, True, message)
+                except Exception as err:
+                    cloud115_record_result(cfg, False, err)
+                finally:
+                    CLOUD115_RUNNING = False
+            time.sleep(max(interval, 1) * 60 if enabled else 30)
+        except Exception:
+            time.sleep(30)
+
+
+def cloud115_start_scheduler():
+    import threading
+
+    global CLOUD115_SCHEDULER_STARTED
+    if CLOUD115_SCHEDULER_STARTED:
+        return
+    CLOUD115_SCHEDULER_STARTED = True
+    thread = threading.Thread(target=cloud115_scheduler_loop, daemon=True)
+    thread.start()
+
+
+@App.route('/cloud115', methods=['POST', 'GET'])
+def cloud115():
+    """
+    Standalone 115 cloud transfer panel.
+    """
+    cloud115_start_scheduler()
+    cfg = cloud115_load_config()
+    message = None
+    status = None
+    if request.method == "POST":
+        action = request.form.get("action", "save")
+        cookie = request.form.get("cookie", "").strip()
+        if cookie:
+            cfg["cookie"] = cookie
+        cfg["source_path"] = request.form.get("source_path", cfg.get("source_path", "")).strip()
+        cfg["target_path"] = request.form.get("target_path", cfg.get("target_path", "")).strip()
+        cfg["delay_seconds"] = float(request.form.get("delay_seconds", cfg.get("delay_seconds", 2)) or 0)
+        cfg["interval_minutes"] = int(request.form.get("interval_minutes", cfg.get("interval_minutes", 60)) or 60)
+        cfg["auto_enabled"] = request.form.get("auto_enabled") == "on"
+        cfg["delete_extras"] = request.form.get("delete_extras") == "on"
+        cloud115_save_config(cfg)
+        if action == "run":
+            global CLOUD115_RUNNING
+            if CLOUD115_RUNNING:
+                status = False
+                message = "A transfer task is already running"
+            else:
+                CLOUD115_RUNNING = True
+                try:
+                    message = cloud115_execute(cfg)
+                    status = True
+                    cloud115_record_result(cfg, True, message)
+                except Exception as err:
+                    status = False
+                    message = str(err)
+                    cloud115_record_result(cfg, False, message)
+                finally:
+                    CLOUD115_RUNNING = False
+        else:
+            status = True
+            message = "Settings saved"
+    return render_template(
+        "cloud115.html",
+        Config=cfg,
+        HasCookie=bool(cfg.get("cookie")),
+        Status=status,
+        Message=message,
+    )
+
+
 @App.route('/cloud115/list', methods=['POST'])
 def cloud115_list():
     import json as jsonlib
     import os
     import subprocess
 
-    cookie = request.form.get("cookie", "").strip()
+    cfg = cloud115_load_config()
+    cookie = request.form.get("cookie", "").strip() or cfg.get("cookie", "")
     path = request.form.get("path", "/").strip() or "/"
     env = os.environ.copy()
     if cookie:
@@ -201,6 +325,9 @@ def cloud115_list():
             "message": (proc.stderr or body or "Failed to read 115 path").strip(),
         }, ensure_ascii=False)
     return body, 200, {"Content-Type": "application/json; charset=utf-8"}
+
+
+cloud115_start_scheduler()
 '''
 
 
@@ -229,18 +356,14 @@ def main():
     `,
   },
 '''
-    anchor = '  {\n    name: "服务",\n    page: "service",'
-    if anchor not in nav_text:
-        anchor = '    page: "service",'
-        index = nav_text.find(anchor)
-        if index == -1:
-            raise RuntimeError("Could not find service menu anchor in navbar index.js")
-        object_start = nav_text.rfind("  {", 0, index)
-        if object_start == -1:
-            raise RuntimeError("Could not find service menu object start in navbar index.js")
-        nav_text = nav_text[:object_start] + menu_item + nav_text[object_start:]
-    else:
-        nav_text = nav_text.replace(anchor, menu_item + anchor, 1)
+    anchor = '    page: "service",'
+    index = nav_text.find(anchor)
+    if index == -1:
+        raise RuntimeError("Could not find service menu anchor in navbar index.js")
+    object_start = nav_text.rfind("  {", 0, index)
+    if object_start == -1:
+        raise RuntimeError("Could not find service menu object start in navbar index.js")
+    nav_text = nav_text[:object_start] + menu_item + nav_text[object_start:]
     NAVBAR.write_text(nav_text, encoding="utf-8")
 
 

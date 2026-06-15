@@ -2,8 +2,8 @@
   <div class="page-header d-print-none">
     <div class="row align-items-center">
       <div class="col">
-        <h2 class="page-title">115云端转移</h2>
-        <div class="text-muted mt-1">填写 115 Cookie 后浏览网盘目录，选择源目录和目标目录，再交给 NASTool 识别命名。</div>
+        <h2 class="page-title">115 Cloud Transfer</h2>
+        <div class="text-muted mt-1">Browse 115 cloud, save settings, and let NASTool handle recognition and naming.</div>
       </div>
     </div>
   </div>
@@ -18,53 +18,92 @@
           </div>
           {% endif %}
 
-          <div class="mb-3">
-            <label class="form-label">115 Cookie</label>
-            <textarea class="form-control" name="cookie" id="cloud115-cookie" rows="3"
-                      placeholder="UID=...; CID=...; SEID=..."></textarea>
-          </div>
-
           <div class="row">
-            <div class="col-12 col-lg-6">
+            <div class="col-12 col-xl-5">
+              <div class="mb-3">
+                <label class="form-label">115 Cookie</label>
+                <textarea class="form-control" name="cookie" id="cloud115-cookie" rows="4"
+                          placeholder="{% if HasCookie %}Saved. Leave blank to keep current cookie.{% else %}UID=...; CID=...; SEID=...{% endif %}"></textarea>
+                <div class="form-hint">Cookie is saved in /config/cloud115.json. Fill this only when adding or replacing it.</div>
+              </div>
+
+              <div class="row">
+                <div class="col-6">
+                  <div class="mb-3">
+                    <label class="form-label">Delay seconds</label>
+                    <input type="number" step="0.1" min="0" class="form-control" name="delay_seconds"
+                           value="{{ Config.delay_seconds }}">
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div class="mb-3">
+                    <label class="form-label">Interval minutes</label>
+                    <input type="number" min="1" class="form-control" name="interval_minutes"
+                           value="{{ Config.interval_minutes }}">
+                  </div>
+                </div>
+              </div>
+
+              <label class="form-check form-switch mb-2">
+                <input class="form-check-input" type="checkbox" name="auto_enabled"
+                       {% if Config.auto_enabled %}checked{% endif %}>
+                <span class="form-check-label">Auto sync on interval</span>
+              </label>
+              <label class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" name="delete_extras"
+                       {% if Config.delete_extras %}checked{% endif %}>
+                <span class="form-check-label">Delete files except media and subtitles after success</span>
+              </label>
+
+              <div class="card bg-light">
+                <div class="card-body">
+                  <div class="text-muted">Last run</div>
+                  <div>{{ Config.last_run or "Never" }}</div>
+                  <div class="text-muted mt-2">Last result</div>
+                  <div>{{ Config.last_message or "-" }}</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="col-12 col-xl-7">
               <div class="card">
                 <div class="card-header">
-                  <h3 class="card-title">115目录浏览</h3>
+                  <h3 class="card-title">115 Browser</h3>
                   <div class="card-actions">
-                    <button class="btn btn-sm btn-outline-primary" type="button" onclick="cloud115Load('/')">根目录</button>
+                    <button class="btn btn-sm btn-outline-primary" type="button" onclick="cloud115Load('/')">Root</button>
                   </div>
                 </div>
                 <div class="card-body">
                   <div class="input-group mb-3">
                     <input type="text" class="form-control" id="cloud115-path" value="/" />
-                    <button class="btn" type="button" onclick="cloud115Load(document.getElementById('cloud115-path').value)">打开</button>
+                    <button class="btn" type="button" onclick="cloud115Load(document.getElementById('cloud115-path').value)">Open</button>
                   </div>
-                  <div class="list-group" id="cloud115-list" style="max-height: 360px; overflow:auto;"></div>
+                  <div class="list-group" id="cloud115-list" style="max-height: 320px; overflow:auto;"></div>
                 </div>
               </div>
-            </div>
 
-            <div class="col-12 col-lg-6">
-              <div class="mb-3">
-                <label class="form-label">源目录</label>
-                <div class="input-group">
-                  <input type="text" class="form-control" name="source_path" id="source-path"
-                         value="{{ SourcePath or '' }}" placeholder="/nastool">
-                  <button class="btn" type="button" onclick="setSelectedPath('source-path')">使用当前目录</button>
+              <div class="row mt-3">
+                <div class="col-12 col-lg-6">
+                  <label class="form-label">Source path</label>
+                  <div class="input-group">
+                    <input type="text" class="form-control" name="source_path" id="source-path"
+                           value="{{ Config.source_path }}" placeholder="/nastool">
+                    <button class="btn" type="button" onclick="setSelectedPath('source-path')">Use current</button>
+                  </div>
+                </div>
+                <div class="col-12 col-lg-6">
+                  <label class="form-label">Target path</label>
+                  <div class="input-group">
+                    <input type="text" class="form-control" name="target_path" id="target-path"
+                           value="{{ Config.target_path }}" placeholder="/nastool-transfer">
+                    <button class="btn" type="button" onclick="setSelectedPath('target-path')">Use current</button>
+                  </div>
                 </div>
               </div>
-              <div class="mb-3">
-                <label class="form-label">目标目录</label>
-                <div class="input-group">
-                  <input type="text" class="form-control" name="target_path" id="target-path"
-                         value="{{ TargetPath or '' }}" placeholder="/nastool转移">
-                  <button class="btn" type="button" onclick="setSelectedPath('target-path')">使用当前目录</button>
-                </div>
-              </div>
-              <div class="alert alert-info">
-                当前页面选择的是 115 云端路径。后台会临时生成虚拟文件树给 NASTool 识别命名，实际移动只发生在 115 云端。
-              </div>
-              <div class="text-end">
-                <button type="submit" class="btn btn-primary">开始115云端转移</button>
+
+              <div class="d-flex justify-content-end gap-2 mt-4">
+                <button type="submit" name="action" value="save" class="btn btn-outline-primary">Save settings</button>
+                <button type="submit" name="action" value="run" class="btn btn-primary">Run now</button>
               </div>
             </div>
           </div>
@@ -93,11 +132,17 @@ function cloud115Join(base, name) {
   return base.replace(/\/+$/g, "") + "/" + name;
 }
 
+function cloud115Escape(value) {
+  return String(value || "").replace(/[&<>"']/g, function (char) {
+    return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[char];
+  });
+}
+
 async function cloud115Load(path) {
   const cookie = document.getElementById("cloud115-cookie").value.trim();
   const list = document.getElementById("cloud115-list");
   const pathInput = document.getElementById("cloud115-path");
-  list.innerHTML = '<div class="list-group-item text-muted">正在读取...</div>';
+  list.innerHTML = '<div class="list-group-item text-muted">Loading...</div>';
   const form = new FormData();
   form.append("cookie", cookie);
   form.append("path", path || "/");
@@ -105,7 +150,7 @@ async function cloud115Load(path) {
     const res = await fetch("/cloud115/list", { method: "POST", body: form });
     const data = await res.json();
     if (!data.ok) {
-      list.innerHTML = '<div class="list-group-item text-danger">' + (data.message || "读取失败") + '</div>';
+      list.innerHTML = '<div class="list-group-item text-danger">' + cloud115Escape(data.message || "Failed") + '</div>';
       return;
     }
     cloud115CurrentPath = data.path || "/";
@@ -117,13 +162,13 @@ async function cloud115Load(path) {
     for (const item of data.items || []) {
       const childPath = cloud115Join(cloud115CurrentPath, item.name);
       const safePath = childPath.replace(/'/g, "\\'");
-      const icon = item.is_dir ? "📁" : "📄";
+      const icon = item.is_dir ? "[DIR]" : "[FILE]";
       const disabled = item.is_dir ? "" : " disabled";
-      rows.push('<button type="button" class="list-group-item list-group-item-action"' + disabled + ' onclick="cloud115Load(\'' + safePath + '\')">' + icon + ' ' + item.name + '</button>');
+      rows.push('<button type="button" class="list-group-item list-group-item-action"' + disabled + ' onclick="cloud115Load(\'' + safePath + '\')">' + icon + ' ' + cloud115Escape(item.name) + '</button>');
     }
-    list.innerHTML = rows.join("") || '<div class="list-group-item text-muted">空目录</div>';
+    list.innerHTML = rows.join("") || '<div class="list-group-item text-muted">Empty</div>';
   } catch (err) {
-    list.innerHTML = '<div class="list-group-item text-danger">' + err + '</div>';
+    list.innerHTML = '<div class="list-group-item text-danger">' + cloud115Escape(err) + '</div>';
   }
 }
 
