@@ -260,14 +260,25 @@ class Cloud115Mover:
         self._list_dir.cache_clear()
 
     def _rename_file(self, file_id, new_name):
-        for method_name in ("fs_rename_app", "fs_rename"):
+        method = getattr(self.client, "fs_rename_app", None)
+        if method:
+            resp = method((str(file_id), new_name), app="android")
+            self._check_optional_response(resp, "failed to rename 115 file")
+            self._list_dir.cache_clear()
+            return
+
+        method = getattr(self.client, "fs_rename", None)
+        if method:
+            resp = method((str(file_id), new_name))
+            self._check_optional_response(resp, "failed to rename 115 file")
+            self._list_dir.cache_clear()
+            return
+
+        for method_name in ("fs_rename_open", "fs_update_open"):
             method = getattr(self.client, method_name, None)
             if not method:
                 continue
-            try:
-                resp = method({"fid": str(file_id), "file_name": new_name})
-            except TypeError:
-                resp = method(str(file_id), new_name)
+            resp = method({"file_id": str(file_id), "file_name": new_name})
             self._check_optional_response(resp, "failed to rename 115 file")
             self._list_dir.cache_clear()
             return
