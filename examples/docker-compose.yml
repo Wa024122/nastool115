@@ -1,0 +1,19 @@
+services:
+  nastool:
+    image: your-dockerhub-name/nastool-cloud115:latest
+    container_name: nastool
+    ports:
+      - "3000:3000"
+    environment:
+      - TZ=Asia/Shanghai
+      - PUID=0
+      - PGID=0
+      - NASTOOL_AUTO_UPDATE=false
+      - CLOUD115_COOKIE_FILE=/config/115.cookie
+      - CLOUD115_SRC_PREFIX=/root/NASTOOL/NASTOOL/nastool
+      - CLOUD115_REMOTE_SRC_ROOT=/nastool
+      - CLOUD115_ON_CONFLICT=fail
+    volumes:
+      - ./config:/config
+      - /root/NASTOOL/NASTOOL/nastool:/root/NASTOOL/NASTOOL/nastool
+    restart: unless-stopped
