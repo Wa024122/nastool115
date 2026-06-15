@@ -2,6 +2,7 @@ import json
 import os
 import posixpath
 import sys
+import time
 from functools import lru_cache
 
 import requests
@@ -240,14 +241,19 @@ class Cloud115Mover:
     def _extract_created_id(self, resp, parent_id, name):
         if isinstance(resp, dict):
             data = resp.get("data") or resp
-            for key in ("cid", "file_id", "id"):
-                if data.get(key):
-                    return str(data[key])
-        self._list_dir.cache_clear()
-        item = self._find_child(str(parent_id), name, want_dir=True)
-        if not item:
-            raise Cloud115Error(f"created directory was not found: {name}")
-        return item["id"]
+            if isinstance(data, list) and data:
+                data = data[0]
+            if isinstance(data, dict):
+                for key in ("cid", "file_id", "id", "fid", "cate_id"):
+                    if data.get(key):
+                        return str(data[key])
+        for _ in range(5):
+            self._list_dir.cache_clear()
+            item = self._find_child(str(parent_id), name, want_dir=True)
+            if item:
+                return item["id"]
+            time.sleep(0.6)
+        raise Cloud115Error(f"created directory was not found: {name}; response={resp}")
 
     def _move_file(self, file_id, dest_parent_id):
         from p115client.client import check_response
