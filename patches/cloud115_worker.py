@@ -252,10 +252,6 @@ class Cloud115Mover:
 
 
 def main():
-    if len(sys.argv) == 3:
-        message = Cloud115Mover().move(sys.argv[1], sys.argv[2])
-        print(json.dumps({"ok": True, "message": message}, ensure_ascii=False))
-        return
     if len(sys.argv) >= 2 and sys.argv[1] == "list":
         path = sys.argv[2] if len(sys.argv) >= 3 else "/"
         result = Cloud115Mover().list_path(path)
@@ -266,6 +262,10 @@ def main():
         Cloud115Mover().list_path("/")
         print(json.dumps({"ok": True, "message": "115 Cookie 可用"}, ensure_ascii=False))
         return
+    if len(sys.argv) == 3:
+        message = Cloud115Mover().move(sys.argv[1], sys.argv[2])
+        print(json.dumps({"ok": True, "message": message}, ensure_ascii=False))
+        return
     raise SystemExit("usage: cloud115_worker.py SRC DEST | list PATH | test")
 
 
@@ -274,4 +274,3 @@ if __name__ == "__main__":
         main()
     except Exception as err:
         print(json.dumps({"ok": False, "message": str(err)}, ensure_ascii=False))
-        raise
