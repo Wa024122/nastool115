@@ -13,6 +13,12 @@ services:
       - CLOUD115_SRC_PREFIX=/root/NASTOOL/NASTOOL/nastool
       - CLOUD115_REMOTE_SRC_ROOT=/nastool
       - CLOUD115_ON_CONFLICT=fail
+      - CLOUD115_DELAY_SECONDS=2
+      - CLOUD115_JITTER_SECONDS=1
+      - CLOUD115_COOLDOWN_SECONDS=90
+      - CLOUD115_RETRY_TIMES=4
+      - CLOUD115_CHECK_FOR_RELOGIN=true
+      - CLOUD115_COOKIE_STORE=/config/cloud115.cookie
     volumes:
       - ./config:/config
       - /root/NASTOOL/NASTOOL/nastool:/root/NASTOOL/NASTOOL/nastool

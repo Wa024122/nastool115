@@ -18,7 +18,10 @@ def cloud115_default_config():
         "source_path": "/nastool",
         "target_path": "/nastool-transfer",
         "delay_seconds": 2,
+        "jitter_seconds": 1,
+        "cooldown_seconds": 90,
         "retry_times": 4,
+        "check_for_relogin": True,
         "auto_enabled": False,
         "interval_minutes": 60,
         "delete_extras": True,
@@ -133,11 +136,21 @@ def cloud115_execute(cfg):
     os.environ["CLOUD115_COOKIES"] = cookie
     os.environ.pop("CLOUD115_COOKIE_FILE", None)
     os.environ["CLOUD115_DELAY_SECONDS"] = str(cfg.get("delay_seconds") or 0)
+    os.environ["CLOUD115_JITTER_SECONDS"] = str(cfg.get("jitter_seconds") or 0)
+    os.environ["CLOUD115_COOLDOWN_SECONDS"] = str(cfg.get("cooldown_seconds") or 0)
     os.environ["CLOUD115_RETRY_TIMES"] = str(cfg.get("retry_times") or 1)
+    os.environ["CLOUD115_CHECK_FOR_RELOGIN"] = "true" if cfg.get("check_for_relogin", True) else "false"
+    os.environ["CLOUD115_COOKIE_STORE"] = "/config/cloud115.cookie"
 
     env = os.environ.copy()
     env["CLOUD115_COOKIES"] = cookie
     env.pop("CLOUD115_COOKIE_FILE", None)
+    env["CLOUD115_DELAY_SECONDS"] = str(cfg.get("delay_seconds") or 0)
+    env["CLOUD115_JITTER_SECONDS"] = str(cfg.get("jitter_seconds") or 0)
+    env["CLOUD115_COOLDOWN_SECONDS"] = str(cfg.get("cooldown_seconds") or 0)
+    env["CLOUD115_RETRY_TIMES"] = str(cfg.get("retry_times") or 1)
+    env["CLOUD115_CHECK_FOR_RELOGIN"] = "true" if cfg.get("check_for_relogin", True) else "false"
+    env["CLOUD115_COOKIE_STORE"] = "/config/cloud115.cookie"
     python = env.get("CLOUD115_PYTHON", "/opt/python312/bin/python3.12")
     worker = env.get("CLOUD115_WORKER", "/nas-tools/app/utils/cloud115_worker.py")
     proc = subprocess.run(
@@ -284,8 +297,11 @@ def cloud115():
         cfg["source_path"] = request.form.get("source_path", cfg.get("source_path", "")).strip()
         cfg["target_path"] = request.form.get("target_path", cfg.get("target_path", "")).strip()
         cfg["delay_seconds"] = float(request.form.get("delay_seconds", cfg.get("delay_seconds", 2)) or 0)
+        cfg["jitter_seconds"] = float(request.form.get("jitter_seconds", cfg.get("jitter_seconds", 1)) or 0)
+        cfg["cooldown_seconds"] = float(request.form.get("cooldown_seconds", cfg.get("cooldown_seconds", 90)) or 0)
         cfg["retry_times"] = int(request.form.get("retry_times", cfg.get("retry_times", 4)) or 1)
         cfg["interval_minutes"] = int(request.form.get("interval_minutes", cfg.get("interval_minutes", 60)) or 60)
+        cfg["check_for_relogin"] = request.form.get("check_for_relogin") == "on"
         cfg["auto_enabled"] = request.form.get("auto_enabled") == "on"
         cfg["delete_extras"] = request.form.get("delete_extras") == "on"
         cloud115_save_config(cfg)
@@ -332,6 +348,12 @@ def cloud115_list():
     if cookie:
         env["CLOUD115_COOKIES"] = cookie
         env.pop("CLOUD115_COOKIE_FILE", None)
+    env["CLOUD115_DELAY_SECONDS"] = str(cfg.get("delay_seconds") or 0)
+    env["CLOUD115_JITTER_SECONDS"] = str(cfg.get("jitter_seconds") or 0)
+    env["CLOUD115_COOLDOWN_SECONDS"] = str(cfg.get("cooldown_seconds") or 0)
+    env["CLOUD115_RETRY_TIMES"] = str(cfg.get("retry_times") or 1)
+    env["CLOUD115_CHECK_FOR_RELOGIN"] = "true" if cfg.get("check_for_relogin", True) else "false"
+    env["CLOUD115_COOKIE_STORE"] = "/config/cloud115.cookie"
     python = env.get("CLOUD115_PYTHON", "/opt/python312/bin/python3.12")
     worker = env.get("CLOUD115_WORKER", "/nas-tools/app/utils/cloud115_worker.py")
     proc = subprocess.run(
@@ -362,6 +384,12 @@ def cloud115_test():
     if cookie:
         env["CLOUD115_COOKIES"] = cookie
         env.pop("CLOUD115_COOKIE_FILE", None)
+    env["CLOUD115_DELAY_SECONDS"] = str(cfg.get("delay_seconds") or 0)
+    env["CLOUD115_JITTER_SECONDS"] = str(cfg.get("jitter_seconds") or 0)
+    env["CLOUD115_COOLDOWN_SECONDS"] = str(cfg.get("cooldown_seconds") or 0)
+    env["CLOUD115_RETRY_TIMES"] = str(cfg.get("retry_times") or 1)
+    env["CLOUD115_CHECK_FOR_RELOGIN"] = "true" if cfg.get("check_for_relogin", True) else "false"
+    env["CLOUD115_COOKIE_STORE"] = "/config/cloud115.cookie"
     python = env.get("CLOUD115_PYTHON", "/opt/python312/bin/python3.12")
     worker = env.get("CLOUD115_WORKER", "/nas-tools/app/utils/cloud115_worker.py")
     proc = subprocess.run(

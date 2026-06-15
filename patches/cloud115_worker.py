@@ -1,9 +1,11 @@
 import json
 import os
 import posixpath
+import random
 import sys
 import time
 from functools import lru_cache
+from pathlib import Path
 
 import requests
 
@@ -19,13 +21,19 @@ class Cloud115Mover:
         self.remote_src_root = self._clean_remote_dir(os.getenv("CLOUD115_REMOTE_SRC_ROOT", ""))
         self.on_conflict = os.getenv("CLOUD115_ON_CONFLICT", "fail").strip().lower()
         self.delay = float(os.getenv("CLOUD115_DELAY_SECONDS", "1.5") or "0")
+        self.jitter = float(os.getenv("CLOUD115_JITTER_SECONDS", str(max(self.delay, 0) * 0.5)) or "0")
+        self.cooldown = float(os.getenv("CLOUD115_COOLDOWN_SECONDS", "90") or "0")
         self.retry_times = int(os.getenv("CLOUD115_RETRY_TIMES", "4") or "1")
+        self.check_for_relogin = self._env_bool("CLOUD115_CHECK_FOR_RELOGIN", True)
+        self.cookie_store = os.getenv("CLOUD115_COOKIE_STORE", "/config/cloud115.cookie").strip()
         if not self.cookies:
             raise Cloud115Error("CLOUD115_COOKIES or CLOUD115_COOKIE_FILE is not configured")
 
-        from p115client.client import P115Client
+        from p115client import P115Client
 
-        self.client = P115Client(cookies=self.cookies)
+        cookie_source = self._prepare_cookie_source()
+        self.client = P115Client(cookie_source, check_for_relogin=self.check_for_relogin)
+        self.cookies = self._read_cookie_source(cookie_source) or self.cookies
         self._headers = {
             "Cookie": self.cookies,
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -103,6 +111,33 @@ class Cloud115Mover:
                 return f.read().strip()
         return ""
 
+    def _prepare_cookie_source(self):
+        if self.cookie_store:
+            path = Path(self.cookie_store)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            current = ""
+            if path.exists():
+                current = path.read_text(encoding="utf-8").strip()
+            if self.cookies and self.cookies != current:
+                path.write_text(self.cookies, encoding="utf-8")
+            return path
+        return self.cookies
+
+    @staticmethod
+    def _read_cookie_source(source):
+        if isinstance(source, Path) and source.exists():
+            return source.read_text(encoding="utf-8").strip()
+        if isinstance(source, str):
+            return source.strip()
+        return ""
+
+    @staticmethod
+    def _env_bool(name, default=False):
+        value = os.getenv(name)
+        if value is None:
+            return default
+        return value.strip().lower() in ("1", "true", "yes", "on")
+
     def _local_to_remote(self, src):
         return self._map_local_to_remote(src, self.src_prefix, self.remote_src_root, "source")
 
@@ -168,25 +203,85 @@ class Cloud115Mover:
 
     @lru_cache(maxsize=4096)
     def _list_dir(self, cid):
-        from p115client.client import check_response
-
         items = []
         offset = 0
         limit = 1000
         while True:
-            resp = self.client.fs_files_app({
-                "cid": int(cid),
-                "limit": limit,
-                "offset": offset,
-                "show_dir": 1,
-            })
-            check_response(resp)
-            page = resp.get("data", [])
+            page = self._with_retries(
+                lambda: self._list_dir_page(cid, offset, limit),
+                f"list directory {cid}",
+            )
             items.extend(self._normalize(item) for item in page)
             if len(page) < limit:
                 break
             offset += limit
         return tuple(items)
+
+    def _list_dir_page(self, cid, offset, limit):
+        from p115client.client import check_response
+
+        payload = {
+            "cid": int(cid),
+            "limit": limit,
+            "offset": offset,
+            "show_dir": 1,
+        }
+        errors = []
+        calls = (
+            ("fs_files_app_android", lambda: self.client.fs_files_app(payload, app="android")),
+            ("fs_files_app", lambda: self.client.fs_files_app(payload)),
+            ("fs_files", lambda: self.client.fs_files(payload)),
+            ("webapi_files", lambda: self._webapi_list(cid, offset, limit)),
+        )
+        for label, call in calls:
+            try:
+                resp = call()
+                if label != "webapi_files":
+                    check_response(resp)
+                return self._extract_list_items(resp)
+            except Exception as err:
+                errors.append(f"{label}: {err}")
+        raise Cloud115Error("cannot list 115 directory: " + " | ".join(errors))
+
+    def _webapi_list(self, cid, offset, limit):
+        resp = requests.get(
+            "https://webapi.115.com/files",
+            params={
+                "aid": 1,
+                "cid": int(cid),
+                "limit": limit,
+                "offset": offset,
+                "show_dir": 1,
+                "format": "json",
+            },
+            headers=self._headers,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, dict) and data.get("state", True) is False:
+            raise Cloud115Error(str(data))
+        return data
+
+    @staticmethod
+    def _extract_list_items(resp):
+        if isinstance(resp, list):
+            return resp
+        if not isinstance(resp, dict):
+            return []
+        data = resp.get("data", resp)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for key in ("list", "files", "items", "data"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    return value
+        for key in ("list", "files", "items"):
+            value = resp.get(key)
+            if isinstance(value, list):
+                return value
+        return []
 
     def _find_child(self, cid, name, want_dir=None):
         for item in self._list_dir(str(cid)):
@@ -364,9 +459,12 @@ class Cloud115Mover:
         self._delete_file(item["id"])
         return f"deleted: {path}"
 
-    def _sleep(self):
-        if self.delay > 0:
-            time.sleep(self.delay)
+    def _sleep(self, seconds=None):
+        wait_time = self.delay if seconds is None else float(seconds or 0)
+        if self.jitter > 0:
+            wait_time += random.uniform(0, self.jitter)
+        if wait_time > 0:
+            time.sleep(wait_time)
 
     def _with_retries(self, func, label):
         last_error = None
@@ -378,9 +476,27 @@ class Cloud115Mover:
                 last_error = err
                 if index >= attempts - 1:
                     break
-                wait_time = max(self.delay, 1.0) * (index + 1)
-                time.sleep(wait_time)
+                if self._looks_rate_limited(err):
+                    wait_time = max(self.cooldown, self.delay, 10.0) * (index + 1)
+                else:
+                    wait_time = max(self.delay, 1.0) * (index + 1)
+                self._sleep(wait_time)
         raise Cloud115Error(f"{label} failed after {attempts} attempts: {last_error}")
+
+    @staticmethod
+    def _looks_rate_limited(err):
+        text = str(err).lower()
+        markers = (
+            "405",
+            "429",
+            "too many",
+            "rate",
+            "频繁",
+            "稍后",
+            "风控",
+            "method not allowed",
+        )
+        return any(marker in text for marker in markers)
 
     @staticmethod
     def _check_optional_response(resp, message):

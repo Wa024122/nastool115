@@ -66,6 +66,12 @@ CLOUD115_COOKIE_FILE=/config/115.cookie
 CLOUD115_SRC_PREFIX=/root/NASTOOL/NASTOOL/nastool
 CLOUD115_REMOTE_SRC_ROOT=/nastool
 CLOUD115_ON_CONFLICT=fail
+CLOUD115_DELAY_SECONDS=2
+CLOUD115_JITTER_SECONDS=1
+CLOUD115_COOLDOWN_SECONDS=90
+CLOUD115_RETRY_TIMES=4
+CLOUD115_CHECK_FOR_RELOGIN=true
+CLOUD115_COOKIE_STORE=/config/cloud115.cookie
 ```
 
 Path mapping example:
@@ -90,3 +96,7 @@ NASTool target paths should use 115 cloud paths, for example:
 - Test with a small folder first.
 - `CLOUD115_ON_CONFLICT=fail` stops when the target file already exists.
 - `CLOUD115_ON_CONFLICT=skip` treats existing target files as success.
+- `CLOUD115_DELAY_SECONDS` is the base wait after 115 operations.
+- `CLOUD115_JITTER_SECONDS` adds a random extra wait to avoid a fixed rhythm.
+- `CLOUD115_COOLDOWN_SECONDS` is used before retrying likely rate-limit errors such as 405/429.
+- `CLOUD115_CHECK_FOR_RELOGIN=true` lets `p115client` handle 405 login-state refresh with a cookie file.
