@@ -18,6 +18,7 @@ def cloud115_default_config():
         "source_path": "/nastool",
         "target_path": "/nastool-transfer",
         "delay_seconds": 2,
+        "retry_times": 4,
         "auto_enabled": False,
         "interval_minutes": 60,
         "delete_extras": True,
@@ -50,6 +51,20 @@ def cloud115_save_config(cfg):
     os.makedirs(os.path.dirname(CLOUD115_CONFIG_FILE), exist_ok=True)
     with open(CLOUD115_CONFIG_FILE, "w", encoding="utf-8") as fp:
         json.dump(cfg, fp, ensure_ascii=False, indent=2)
+
+
+def cloud115_normalize_cookie(cookie):
+    return " ".join((cookie or "").replace("\r", "\n").split())
+
+
+def cloud115_cookie_fingerprint(cookie):
+    import hashlib
+
+    cookie = cloud115_normalize_cookie(cookie)
+    if not cookie:
+        return ""
+    digest = hashlib.sha256(cookie.encode("utf-8")).hexdigest()
+    return f"{digest[:8]}...{digest[-8:]}"
 
 
 def cloud115_get_media_exts():
@@ -114,10 +129,15 @@ def cloud115_execute(cfg):
     if not cookie:
         raise RuntimeError("115 Cookie is required")
 
+    cookie = cloud115_normalize_cookie(cookie)
     os.environ["CLOUD115_COOKIES"] = cookie
+    os.environ.pop("CLOUD115_COOKIE_FILE", None)
     os.environ["CLOUD115_DELAY_SECONDS"] = str(cfg.get("delay_seconds") or 0)
+    os.environ["CLOUD115_RETRY_TIMES"] = str(cfg.get("retry_times") or 1)
 
     env = os.environ.copy()
+    env["CLOUD115_COOKIES"] = cookie
+    env.pop("CLOUD115_COOKIE_FILE", None)
     python = env.get("CLOUD115_PYTHON", "/opt/python312/bin/python3.12")
     worker = env.get("CLOUD115_WORKER", "/nas-tools/app/utils/cloud115_worker.py")
     proc = subprocess.run(
@@ -258,12 +278,13 @@ def cloud115():
     status = None
     if request.method == "POST":
         action = request.form.get("action", "save")
-        cookie = request.form.get("cookie", "").strip()
+        cookie = cloud115_normalize_cookie(request.form.get("cookie", ""))
         if cookie:
             cfg["cookie"] = cookie
         cfg["source_path"] = request.form.get("source_path", cfg.get("source_path", "")).strip()
         cfg["target_path"] = request.form.get("target_path", cfg.get("target_path", "")).strip()
         cfg["delay_seconds"] = float(request.form.get("delay_seconds", cfg.get("delay_seconds", 2)) or 0)
+        cfg["retry_times"] = int(request.form.get("retry_times", cfg.get("retry_times", 4)) or 1)
         cfg["interval_minutes"] = int(request.form.get("interval_minutes", cfg.get("interval_minutes", 60)) or 60)
         cfg["auto_enabled"] = request.form.get("auto_enabled") == "on"
         cfg["delete_extras"] = request.form.get("delete_extras") == "on"
@@ -292,6 +313,7 @@ def cloud115():
         "cloud115.html",
         Config=cfg,
         HasCookie=bool(cfg.get("cookie")),
+        CookieFingerprint=cloud115_cookie_fingerprint(cfg.get("cookie", "")),
         Status=status,
         Message=message,
     )
@@ -304,11 +326,12 @@ def cloud115_list():
     import subprocess
 
     cfg = cloud115_load_config()
-    cookie = request.form.get("cookie", "").strip() or cfg.get("cookie", "")
+    cookie = cloud115_normalize_cookie(request.form.get("cookie", "")) or cloud115_normalize_cookie(cfg.get("cookie", ""))
     path = request.form.get("path", "/").strip() or "/"
     env = os.environ.copy()
     if cookie:
         env["CLOUD115_COOKIES"] = cookie
+        env.pop("CLOUD115_COOKIE_FILE", None)
     python = env.get("CLOUD115_PYTHON", "/opt/python312/bin/python3.12")
     worker = env.get("CLOUD115_WORKER", "/nas-tools/app/utils/cloud115_worker.py")
     proc = subprocess.run(
@@ -323,6 +346,36 @@ def cloud115_list():
         body = jsonlib.dumps({
             "ok": False,
             "message": (proc.stderr or body or "Failed to read 115 path").strip(),
+        }, ensure_ascii=False)
+    return body, 200, {"Content-Type": "application/json; charset=utf-8"}
+
+
+@App.route('/cloud115/test', methods=['POST'])
+def cloud115_test():
+    import json as jsonlib
+    import os
+    import subprocess
+
+    cfg = cloud115_load_config()
+    cookie = cloud115_normalize_cookie(request.form.get("cookie", "")) or cloud115_normalize_cookie(cfg.get("cookie", ""))
+    env = os.environ.copy()
+    if cookie:
+        env["CLOUD115_COOKIES"] = cookie
+        env.pop("CLOUD115_COOKIE_FILE", None)
+    python = env.get("CLOUD115_PYTHON", "/opt/python312/bin/python3.12")
+    worker = env.get("CLOUD115_WORKER", "/nas-tools/app/utils/cloud115_worker.py")
+    proc = subprocess.run(
+        [python, worker, "test"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        text=True,
+    )
+    body = (proc.stdout or "").strip()
+    if proc.returncode != 0:
+        body = jsonlib.dumps({
+            "ok": False,
+            "message": (proc.stderr or body or "Cookie test failed").strip(),
         }, ensure_ascii=False)
     return body, 200, {"Content-Type": "application/json; charset=utf-8"}
 

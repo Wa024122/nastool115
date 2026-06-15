@@ -19,6 +19,7 @@ class Cloud115Mover:
         self.remote_src_root = self._clean_remote_dir(os.getenv("CLOUD115_REMOTE_SRC_ROOT", ""))
         self.on_conflict = os.getenv("CLOUD115_ON_CONFLICT", "fail").strip().lower()
         self.delay = float(os.getenv("CLOUD115_DELAY_SECONDS", "1.5") or "0")
+        self.retry_times = int(os.getenv("CLOUD115_RETRY_TIMES", "4") or "1")
         if not self.cookies:
             raise Cloud115Error("CLOUD115_COOKIES or CLOUD115_COOKIE_FILE is not configured")
 
@@ -223,24 +224,26 @@ class Cloud115Mover:
         return cid
 
     def _mkdir(self, parent_id, name):
-        method = getattr(self.client, "fs_mkdir_app", None)
-        if method:
-            resp = method(name, pid=int(parent_id), app="android")
-            return self._extract_created_id(resp, parent_id, name)
+        def do_mkdir():
+            method = getattr(self.client, "fs_mkdir_app", None)
+            if method:
+                return method(name, pid=int(parent_id), app="android")
 
-        method = getattr(self.client, "fs_mkdir", None)
-        if method:
-            resp = method(name, pid=int(parent_id))
-            return self._extract_created_id(resp, parent_id, name)
+            method = getattr(self.client, "fs_mkdir", None)
+            if method:
+                return method(name, pid=int(parent_id))
 
-        resp = requests.post(
-            "https://webapi.115.com/files/add",
-            data={"pid": parent_id, "cname": name},
-            headers=self._headers,
-            timeout=30,
-        ).json()
-        if not resp.get("state", False):
-            raise Cloud115Error(f"failed to create 115 directory {name}: {resp}")
+            resp = requests.post(
+                "https://webapi.115.com/files/add",
+                data={"pid": parent_id, "cname": name},
+                headers=self._headers,
+                timeout=30,
+            ).json()
+            if not resp.get("state", False):
+                raise Cloud115Error(f"failed to create 115 directory {name}: {resp}")
+            return resp
+
+        resp = self._with_retries(do_mkdir, f"mkdir {name}")
         return self._extract_created_id(resp, parent_id, name)
 
     def _extract_created_id(self, resp, parent_id, name):
@@ -263,84 +266,92 @@ class Cloud115Mover:
     def _move_file(self, file_id, dest_parent_id):
         from p115client.client import check_response
 
-        errors = []
-        for call in (
-            lambda: self.client.fs_move_app(str(file_id), pid=int(dest_parent_id), app="android"),
-            lambda: self.client.fs_move(str(file_id), pid=int(dest_parent_id)),
-        ):
-            try:
-                resp = call()
-                check_response(resp)
-                self._list_dir.cache_clear()
-                self._sleep()
-                return
-            except Exception as err:
-                errors.append(str(err))
-        resp = requests.post(
-            "https://webapi.115.com/files/move",
-            data={"ids": str(file_id), "to_cid": int(dest_parent_id)},
-            headers=self._headers,
-            timeout=30,
-        ).json()
-        if not resp.get("state", False):
-            raise Cloud115Error(f"failed to move 115 file: {resp}; previous={errors}")
+        def do_move():
+            errors = []
+            for call in (
+                lambda: self.client.fs_move_app(str(file_id), pid=int(dest_parent_id), app="android"),
+                lambda: self.client.fs_move(str(file_id), pid=int(dest_parent_id)),
+            ):
+                try:
+                    resp = call()
+                    check_response(resp)
+                    return resp
+                except Exception as err:
+                    errors.append(str(err))
+            resp = requests.post(
+                "https://webapi.115.com/files/move",
+                data={"ids": str(file_id), "to_cid": int(dest_parent_id)},
+                headers=self._headers,
+                timeout=30,
+            ).json()
+            if not resp.get("state", False):
+                raise Cloud115Error(f"failed to move 115 file: {resp}; previous={errors}")
+            return resp
+
+        self._with_retries(do_move, f"move {file_id}")
         self._list_dir.cache_clear()
         self._sleep()
 
     def _rename_file(self, file_id, new_name):
-        method = getattr(self.client, "fs_rename_app", None)
-        if method:
-            resp = method((str(file_id), new_name), app="android")
-            self._check_optional_response(resp, "failed to rename 115 file")
-            self._list_dir.cache_clear()
-            self._sleep()
-            return
+        def do_rename():
+            errors = []
+            for call in (
+                lambda: getattr(self.client, "fs_rename_app")((str(file_id), new_name), app="android")
+                if getattr(self.client, "fs_rename_app", None) else None,
+                lambda: getattr(self.client, "fs_rename")((str(file_id), new_name))
+                if getattr(self.client, "fs_rename", None) else None,
+            ):
+                try:
+                    resp = call()
+                    if resp is None:
+                        continue
+                    self._check_optional_response(resp, "failed to rename 115 file")
+                    return resp
+                except Exception as err:
+                    errors.append(str(err))
+            for method_name in ("fs_rename_open", "fs_update_open"):
+                method = getattr(self.client, method_name, None)
+                if not method:
+                    continue
+                try:
+                    resp = method({"file_id": str(file_id), "file_name": new_name})
+                    self._check_optional_response(resp, "failed to rename 115 file")
+                    return resp
+                except Exception as err:
+                    errors.append(str(err))
+            resp = requests.post(
+                "https://webapi.115.com/files/edit",
+                data={"fid": str(file_id), "file_name": new_name},
+                headers=self._headers,
+                timeout=30,
+            ).json()
+            self._check_optional_response(resp, f"failed to rename 115 file; previous={errors}")
+            return resp
 
-        method = getattr(self.client, "fs_rename", None)
-        if method:
-            resp = method((str(file_id), new_name))
-            self._check_optional_response(resp, "failed to rename 115 file")
-            self._list_dir.cache_clear()
-            self._sleep()
-            return
-
-        for method_name in ("fs_rename_open", "fs_update_open"):
-            method = getattr(self.client, method_name, None)
-            if not method:
-                continue
-            resp = method({"file_id": str(file_id), "file_name": new_name})
-            self._check_optional_response(resp, "failed to rename 115 file")
-            self._list_dir.cache_clear()
-            self._sleep()
-            return
-
-        resp = requests.post(
-            "https://webapi.115.com/files/edit",
-            data={"fid": str(file_id), "file_name": new_name},
-            headers=self._headers,
-            timeout=30,
-        ).json()
-        self._check_optional_response(resp, "failed to rename 115 file")
+        self._with_retries(do_rename, f"rename {file_id}")
         self._list_dir.cache_clear()
         self._sleep()
 
     def _delete_file(self, file_id):
         from p115client.client import check_response
 
-        errors = []
-        for call in (
-            lambda: self.client.fs_delete_app(str(file_id), app="android"),
-            lambda: self.client.fs_delete(str(file_id)),
-        ):
-            try:
-                resp = call()
-                check_response(resp)
-                self._list_dir.cache_clear()
-                self._sleep()
-                return
-            except Exception as err:
-                errors.append(str(err))
-        raise Cloud115Error(f"failed to delete 115 file: {file_id}; previous={errors}")
+        def do_delete():
+            errors = []
+            for call in (
+                lambda: self.client.fs_delete_app(str(file_id), app="android"),
+                lambda: self.client.fs_delete(str(file_id)),
+            ):
+                try:
+                    resp = call()
+                    check_response(resp)
+                    return resp
+                except Exception as err:
+                    errors.append(str(err))
+            raise Cloud115Error(f"failed to delete 115 file: {file_id}; previous={errors}")
+
+        self._with_retries(do_delete, f"delete {file_id}")
+        self._list_dir.cache_clear()
+        self._sleep()
 
     def delete_path(self, path):
         path = self._clean_remote_file(path)
@@ -356,6 +367,20 @@ class Cloud115Mover:
     def _sleep(self):
         if self.delay > 0:
             time.sleep(self.delay)
+
+    def _with_retries(self, func, label):
+        last_error = None
+        attempts = max(self.retry_times, 1)
+        for index in range(attempts):
+            try:
+                return func()
+            except Exception as err:
+                last_error = err
+                if index >= attempts - 1:
+                    break
+                wait_time = max(self.delay, 1.0) * (index + 1)
+                time.sleep(wait_time)
+        raise Cloud115Error(f"{label} failed after {attempts} attempts: {last_error}")
 
     @staticmethod
     def _check_optional_response(resp, message):

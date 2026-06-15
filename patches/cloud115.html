@@ -24,7 +24,11 @@
                 <label class="form-label">115 Cookie</label>
                 <textarea class="form-control" name="cookie" id="cloud115-cookie" rows="4"
                           placeholder="{% if HasCookie %}Saved. Leave blank to keep current cookie.{% else %}UID=...; CID=...; SEID=...{% endif %}"></textarea>
-                <div class="form-hint">Cookie is saved in /config/cloud115.json. Fill this only when adding or replacing it.</div>
+                <div class="form-hint">
+                  Cookie is saved in /config/cloud115.json. Fill this only when adding or replacing it.
+                  {% if CookieFingerprint %}<br>Saved cookie fingerprint: <code>{{ CookieFingerprint }}</code>{% endif %}
+                </div>
+                <button class="btn btn-sm btn-outline-secondary mt-2" type="button" onclick="cloud115TestCookie()">Test cookie</button>
               </div>
 
               <div class="row">
@@ -33,6 +37,13 @@
                     <label class="form-label">Delay seconds</label>
                     <input type="number" step="0.1" min="0" class="form-control" name="delay_seconds"
                            value="{{ Config.delay_seconds }}">
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div class="mb-3">
+                    <label class="form-label">Retry times</label>
+                    <input type="number" min="1" max="10" class="form-control" name="retry_times"
+                           value="{{ Config.retry_times }}">
                   </div>
                 </div>
                 <div class="col-6">
@@ -169,6 +180,19 @@ async function cloud115Load(path) {
     list.innerHTML = rows.join("") || '<div class="list-group-item text-muted">Empty</div>';
   } catch (err) {
     list.innerHTML = '<div class="list-group-item text-danger">' + cloud115Escape(err) + '</div>';
+  }
+}
+
+async function cloud115TestCookie() {
+  const cookie = document.getElementById("cloud115-cookie").value.trim();
+  const form = new FormData();
+  form.append("cookie", cookie);
+  try {
+    const res = await fetch("/cloud115/test", { method: "POST", body: form });
+    const data = await res.json();
+    alert(data.ok ? (data.message || "Cookie OK") : (data.message || "Cookie failed"));
+  } catch (err) {
+    alert(err);
   }
 }
 
