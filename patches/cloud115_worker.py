@@ -32,7 +32,7 @@ class Cloud115Mover:
 
     def move(self, src, dest):
         src_remote = self._local_to_remote(src)
-        dest_remote = self._clean_remote_file(dest)
+        dest_remote = self._dest_to_remote(dest)
         dest_dir = posixpath.dirname(dest_remote)
         dest_name = posixpath.basename(dest_remote)
 
@@ -67,16 +67,26 @@ class Cloud115Mover:
         return ""
 
     def _local_to_remote(self, src):
-        src_norm = os.path.normpath(src)
-        prefix_norm = os.path.normpath(self.src_prefix)
+        return self._map_local_to_remote(src, self.src_prefix, self.remote_src_root, "source")
+
+    def _dest_to_remote(self, dest):
+        dest_prefix = os.getenv("CLOUD115_DEST_PREFIX", "").rstrip("/\\")
+        remote_dest_root = self._clean_remote_dir(os.getenv("CLOUD115_REMOTE_DEST_ROOT", ""))
+        if dest_prefix and remote_dest_root:
+            return self._map_local_to_remote(dest, dest_prefix, remote_dest_root, "target")
+        return self._clean_remote_file(dest)
+
+    def _map_local_to_remote(self, local_path, local_prefix, remote_root, label):
+        src_norm = os.path.normpath(local_path)
+        prefix_norm = os.path.normpath(local_prefix)
         try:
             rel = os.path.relpath(src_norm, prefix_norm)
         except ValueError as err:
-            raise Cloud115Error(f"source path is outside CLOUD115_SRC_PREFIX: {src}") from err
+            raise Cloud115Error(f"{label} path is outside configured prefix: {local_path}") from err
         if rel == "." or rel.startswith(".."):
-            raise Cloud115Error(f"source path is outside CLOUD115_SRC_PREFIX: {src}")
+            raise Cloud115Error(f"{label} path is outside configured prefix: {local_path}")
         rel = rel.replace("\\", "/")
-        return self._clean_remote_file(posixpath.join(self.remote_src_root, rel))
+        return self._clean_remote_file(posixpath.join(remote_root, rel))
 
     @staticmethod
     def _clean_remote_dir(path):
