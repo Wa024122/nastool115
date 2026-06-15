@@ -114,13 +114,30 @@ class Cloud115Mover:
         return path
 
     def _normalize(self, item):
-        from p115client.client import normalize_attr_simple
-
-        data = normalize_attr_simple(item)
+        data = item or {}
+        file_id = (
+            data.get("id")
+            or data.get("fid")
+            or data.get("file_id")
+            or data.get("cid")
+            or data.get("cate_id")
+        )
+        name = (
+            data.get("name")
+            or data.get("file_name")
+            or data.get("n")
+            or data.get("fn")
+            or ""
+        )
+        is_dir = data.get("is_dir")
+        if is_dir is None:
+            is_dir = data.get("is_directory")
+        if is_dir is None:
+            is_dir = data.get("type") == 1 or data.get("fc") == "0" or bool(data.get("cid") and not data.get("fid"))
         return {
-            "id": str(data["id"]),
-            "name": data.get("name") or data.get("file_name") or "",
-            "is_dir": bool(data.get("is_dir")),
+            "id": str(file_id),
+            "name": str(name),
+            "is_dir": bool(is_dir),
         }
 
     @lru_cache(maxsize=4096)
