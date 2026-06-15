@@ -3,13 +3,13 @@
     <div class="row align-items-center">
       <div class="col">
         <h2 class="page-title">115云端转移</h2>
-        <div class="text-muted mt-1">使用 NASTool 识别命名，使用 115 API 云端移动。</div>
+        <div class="text-muted mt-1">填写 115 Cookie 后浏览网盘目录，选择源目录和目标目录，再交给 NASTool 识别命名。</div>
       </div>
     </div>
   </div>
 
   <div class="row row-cards mt-3">
-    <div class="col-12 col-lg-8">
+    <div class="col-12">
       <form class="card" method="post" action="/cloud115">
         <div class="card-body">
           {% if Message %}
@@ -17,38 +17,116 @@
             {{ Message }}
           </div>
           {% endif %}
+
           <div class="mb-3">
-            <label class="form-label">源目录</label>
-            <input type="text" class="form-control" name="source_path" value="{{ SourcePath or '' }}"
-                   placeholder="/mnt/CloudNAS/CloudDrive/nastool">
+            <label class="form-label">115 Cookie</label>
+            <textarea class="form-control" name="cookie" id="cloud115-cookie" rows="3"
+                      placeholder="UID=...; CID=...; SEID=..."></textarea>
           </div>
-          <div class="mb-3">
-            <label class="form-label">目标目录</label>
-            <input type="text" class="form-control" name="target_path" value="{{ TargetPath or '' }}"
-                   placeholder="/mnt/CloudNAS/CloudDrive/nastool转移">
+
+          <div class="row">
+            <div class="col-12 col-lg-6">
+              <div class="card">
+                <div class="card-header">
+                  <h3 class="card-title">115目录浏览</h3>
+                  <div class="card-actions">
+                    <button class="btn btn-sm btn-outline-primary" type="button" onclick="cloud115Load('/')">根目录</button>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="input-group mb-3">
+                    <input type="text" class="form-control" id="cloud115-path" value="/" />
+                    <button class="btn" type="button" onclick="cloud115Load(document.getElementById('cloud115-path').value)">打开</button>
+                  </div>
+                  <div class="list-group" id="cloud115-list" style="max-height: 360px; overflow:auto;"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="col-12 col-lg-6">
+              <div class="mb-3">
+                <label class="form-label">源目录</label>
+                <div class="input-group">
+                  <input type="text" class="form-control" name="source_path" id="source-path"
+                         value="{{ SourcePath or '' }}" placeholder="/nastool">
+                  <button class="btn" type="button" onclick="setSelectedPath('source-path')">使用当前目录</button>
+                </div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">目标目录</label>
+                <div class="input-group">
+                  <input type="text" class="form-control" name="target_path" id="target-path"
+                         value="{{ TargetPath or '' }}" placeholder="/nastool转移">
+                  <button class="btn" type="button" onclick="setSelectedPath('target-path')">使用当前目录</button>
+                </div>
+              </div>
+              <div class="alert alert-info">
+                当前页面选择的是 115 云端路径。若你仍想让 NASTool 通过 CloudDrive 路径生成命名，请继续配置
+                <code>CLOUD115_SRC_PREFIX</code> 和 <code>CLOUD115_DEST_PREFIX</code> 映射。
+              </div>
+              <div class="text-end">
+                <button type="submit" class="btn btn-primary">开始115云端转移</button>
+              </div>
+            </div>
           </div>
-          <div class="text-muted">
-            目标目录用于 NASTool 生成最终分类和命名；实际移动由 CLOUD115_DEST_PREFIX 映射到 115 云端目录。
-          </div>
-        </div>
-        <div class="card-footer text-end">
-          <button type="submit" class="btn btn-primary">开始115云端转移</button>
         </div>
       </form>
     </div>
-    <div class="col-12 col-lg-4">
-      <div class="card">
-        <div class="card-header">
-          <h3 class="card-title">环境变量</h3>
-        </div>
-        <div class="card-body">
-          <div class="mb-2"><code>CLOUD115_SRC_PREFIX</code></div>
-          <div class="mb-2"><code>CLOUD115_REMOTE_SRC_ROOT</code></div>
-          <div class="mb-2"><code>CLOUD115_DEST_PREFIX</code></div>
-          <div class="mb-2"><code>CLOUD115_REMOTE_DEST_ROOT</code></div>
-          <div class="text-muted">源目录和目标目录都可以继续填写 CloudDrive 挂载路径。</div>
-        </div>
-      </div>
-    </div>
   </div>
 </div>
+
+<script>
+let cloud115CurrentPath = "/";
+
+function cloud115Parent(path) {
+  if (!path || path === "/") return "/";
+  const parts = path.replace(/\/+$/g, "").split("/");
+  parts.pop();
+  return parts.join("/") || "/";
+}
+
+function setSelectedPath(inputId) {
+  document.getElementById(inputId).value = cloud115CurrentPath;
+}
+
+function cloud115Join(base, name) {
+  if (!base || base === "/") return "/" + name;
+  return base.replace(/\/+$/g, "") + "/" + name;
+}
+
+async function cloud115Load(path) {
+  const cookie = document.getElementById("cloud115-cookie").value.trim();
+  const list = document.getElementById("cloud115-list");
+  const pathInput = document.getElementById("cloud115-path");
+  list.innerHTML = '<div class="list-group-item text-muted">正在读取...</div>';
+  const form = new FormData();
+  form.append("cookie", cookie);
+  form.append("path", path || "/");
+  try {
+    const res = await fetch("/cloud115/list", { method: "POST", body: form });
+    const data = await res.json();
+    if (!data.ok) {
+      list.innerHTML = '<div class="list-group-item text-danger">' + (data.message || "读取失败") + '</div>';
+      return;
+    }
+    cloud115CurrentPath = data.path || "/";
+    pathInput.value = cloud115CurrentPath;
+    const rows = [];
+    if (cloud115CurrentPath !== "/") {
+      rows.push('<button type="button" class="list-group-item list-group-item-action" onclick="cloud115Load(\'' + cloud115Parent(cloud115CurrentPath).replace(/'/g, "\\'") + '\')">..</button>');
+    }
+    for (const item of data.items || []) {
+      const childPath = cloud115Join(cloud115CurrentPath, item.name);
+      const safePath = childPath.replace(/'/g, "\\'");
+      const icon = item.is_dir ? "📁" : "📄";
+      const disabled = item.is_dir ? "" : " disabled";
+      rows.push('<button type="button" class="list-group-item list-group-item-action"' + disabled + ' onclick="cloud115Load(\'' + safePath + '\')">' + icon + ' ' + item.name + '</button>');
+    }
+    list.innerHTML = rows.join("") || '<div class="list-group-item text-muted">空目录</div>';
+  } catch (err) {
+    list.innerHTML = '<div class="list-group-item text-danger">' + err + '</div>';
+  }
+}
+
+cloud115Load("/");
+</script>

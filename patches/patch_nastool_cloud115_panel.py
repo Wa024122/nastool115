@@ -18,8 +18,12 @@ def cloud115():
     source_path = ""
     target_path = ""
     if request.method == "POST":
+        cookie = request.form.get("cookie", "").strip()
         source_path = request.form.get("source_path", "").strip()
         target_path = request.form.get("target_path", "").strip()
+        if cookie:
+            import os
+            os.environ["CLOUD115_COOKIES"] = cookie
         if not source_path:
             status = False
             message = "源目录不能为空"
@@ -43,6 +47,35 @@ def cloud115():
         Status=status,
         Message=message,
     )
+
+
+@App.route('/cloud115/list', methods=['POST'])
+def cloud115_list():
+    import json as jsonlib
+    import os
+    import subprocess
+
+    cookie = request.form.get("cookie", "").strip()
+    path = request.form.get("path", "/").strip() or "/"
+    env = os.environ.copy()
+    if cookie:
+        env["CLOUD115_COOKIES"] = cookie
+    python = env.get("CLOUD115_PYTHON", "/opt/python312/bin/python3.12")
+    worker = env.get("CLOUD115_WORKER", "/nas-tools/app/utils/cloud115_worker.py")
+    proc = subprocess.run(
+        [python, worker, "list", path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        text=True,
+    )
+    body = (proc.stdout or "").strip()
+    if proc.returncode != 0:
+        body = jsonlib.dumps({
+            "ok": False,
+            "message": (proc.stderr or body or "读取115目录失败").strip(),
+        }, ensure_ascii=False)
+    return body, 200, {"Content-Type": "application/json; charset=utf-8"}
 '''
 
 

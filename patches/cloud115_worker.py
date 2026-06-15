@@ -19,8 +19,6 @@ class Cloud115Mover:
         self.on_conflict = os.getenv("CLOUD115_ON_CONFLICT", "fail").strip().lower()
         if not self.cookies:
             raise Cloud115Error("CLOUD115_COOKIES or CLOUD115_COOKIE_FILE is not configured")
-        if not self.src_prefix or not self.remote_src_root:
-            raise Cloud115Error("CLOUD115_SRC_PREFIX and CLOUD115_REMOTE_SRC_ROOT are required")
 
         from p115client.client import P115Client
 
@@ -31,6 +29,8 @@ class Cloud115Mover:
         }
 
     def move(self, src, dest):
+        if not self.src_prefix or not self.remote_src_root:
+            raise Cloud115Error("CLOUD115_SRC_PREFIX and CLOUD115_REMOTE_SRC_ROOT are required")
         src_remote = self._local_to_remote(src)
         dest_remote = self._dest_to_remote(dest)
         dest_dir = posixpath.dirname(dest_remote)
@@ -55,6 +55,17 @@ class Cloud115Mover:
         if src_name != dest_name:
             self._rename_file(file_id, dest_name)
         return ""
+
+    def list_path(self, path):
+        cid = self._resolve_dir(path)
+        items = sorted(
+            self._list_dir(cid),
+            key=lambda item: (not item["is_dir"], item["name"].lower()),
+        )
+        return {
+            "path": self._clean_remote_dir(path),
+            "items": items,
+        }
 
     def _load_cookies(self):
         cookies = os.getenv("CLOUD115_COOKIES", "").strip()
@@ -241,10 +252,21 @@ class Cloud115Mover:
 
 
 def main():
-    if len(sys.argv) != 3:
-        raise SystemExit("usage: cloud115_worker.py SRC DEST")
-    message = Cloud115Mover().move(sys.argv[1], sys.argv[2])
-    print(json.dumps({"ok": True, "message": message}, ensure_ascii=False))
+    if len(sys.argv) == 3:
+        message = Cloud115Mover().move(sys.argv[1], sys.argv[2])
+        print(json.dumps({"ok": True, "message": message}, ensure_ascii=False))
+        return
+    if len(sys.argv) >= 2 and sys.argv[1] == "list":
+        path = sys.argv[2] if len(sys.argv) >= 3 else "/"
+        result = Cloud115Mover().list_path(path)
+        result["ok"] = True
+        print(json.dumps(result, ensure_ascii=False))
+        return
+    if len(sys.argv) >= 2 and sys.argv[1] == "test":
+        Cloud115Mover().list_path("/")
+        print(json.dumps({"ok": True, "message": "115 Cookie 可用"}, ensure_ascii=False))
+        return
+    raise SystemExit("usage: cloud115_worker.py SRC DEST | list PATH | test")
 
 
 if __name__ == "__main__":
