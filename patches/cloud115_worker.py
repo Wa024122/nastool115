@@ -218,14 +218,14 @@ class Cloud115Mover:
         return cid
 
     def _mkdir(self, parent_id, name):
-        for method_name in ("fs_mkdir_app", "fs_mkdir"):
-            method = getattr(self.client, method_name, None)
-            if not method:
-                continue
-            try:
-                resp = method({"pid": int(parent_id), "cname": name})
-            except TypeError:
-                resp = method(name, int(parent_id))
+        method = getattr(self.client, "fs_mkdir_app", None)
+        if method:
+            resp = method(name, pid=int(parent_id), app="android")
+            return self._extract_created_id(resp, parent_id, name)
+
+        method = getattr(self.client, "fs_mkdir", None)
+        if method:
+            resp = method(name, pid=int(parent_id))
             return self._extract_created_id(resp, parent_id, name)
 
         resp = requests.post(
